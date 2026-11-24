@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Picking Twin - Sistema de Rutas e Inventario en Tiempo Real</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- HTML5 QR Code Scanner Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            warehouse: {
+              bg: '#0f172a',
+              card: '#1e293b',
+              border: '#334155',
+              aisle: '#3b82f6',
+              deposit: '#f59e0b',
+              scanned: '#10b981',
+              active: '#f59e0b',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    /* Estilos personalizados para animaciones del mapa y estados */
+    .node-pulse {
+      animation: pulse-ring 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.25); opacity: 0.4; }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+    .route-path {
+      stroke-dasharray: 8, 8;
+      animation: dash 20s linear infinite;
+    }
+    @keyframes dash {
+      to { stroke-dashoffset: -1000; }
+    }
+    /* Scrollbar estilizada */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col antialiased selection:bg-amber-500 selection:text-slate-950">
+
+  <!-- ==================== ENCABEZADO Y SELECTOR DE VISTAS ==================== -->
+  <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50 shadow-lg">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+      
+      <!-- Brand Ident -->
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center font-extrabold text-slate-950 shadow-md shadow-amber-500/20 text-lg">
+          PT
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="text-xl font-bold tracking-tight text-white">Picking Twin</h1>
+            <span class="px-2 py-0.5 text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full">v2.4 (Hilos + Flags)</span>
+          </div>
+          <p class="text-xs text-slate-400">Rutas de picking óptimas e inventario en tiempo real</p>
+        </div>
+      </div>
+
+      <!-- Control de Modo de Vista (PC / Móvil / Dual) -->
+      <div class="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+        <button id="btnViewDual" onclick="setModoVista('dual')" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 bg-amber-500 text-slate-950 shadow">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v12a2 2 0 01-2 2h-2a2 2 0 01-2-2V6z"></path></svg>
+          <span class="hidden sm:inline">Vista Dual (Simulación)</span>
+        </button>
+        <button id="btnViewMobile" onclick="setModoVista('mobile')" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all flex items-center space-x-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"></path></svg>
+          <span>Operario (Móvil)</span>
+        </button>
+        <button id="btnViewPC" onclick="setModoVista('pc')" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all flex items-center space-x-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+          <span>Inventario (PC)</span>
+        </button>
+      </div>
+
+      <!-- Estado Sincronización Multi-Pestaña -->
+      <div class="hidden md:flex items-center space-x-2 text-xs bg-slate-800/60 px-3 py-1.5 rounded-lg border border-slate-700/50">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span class="text-slate-300 font-medium">BroadcastChannel Sync: <strong class="text-emerald-400">Activo</strong></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==================== PANEL DISCRETO: BANDERAS Y HILOS (STATE FLAGS) ==================== -->
+  <div class="bg-slate-900/90 border-b border-slate-800 px-4 py-2 text-xs font-mono">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center space-x-2 text-slate-400">
+        <svg class="w-4 h-4 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+        <span class="font-bold text-slate-200">Banderas del Hilo Secundario (Web Worker):</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="flex items-center space-x-1.5">
+          <span class="text-slate-500">reqId:</span>
+          <span id="flagRequestId" class="text-amber-400 font-bold">#0</span>
+        </div>
+        <div class="flex items-center space-x-1.5">
+          <span class="text-slate-500">isCalculandoRuta:</span>
+          <span id="flagCalculando" class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">false</span>
+        </div>
+        <div class="flex items-center space-x-1.5">
+          <span class="text-slate-500">isEscanerBloqueado:</span>
+          <span id="flagBloqueado" class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">false</span>
+        </div>
+        <div class="flex items-center space-x-1.5">
+          <span class="text-slate-500">isSincronizandoStock:</span>
+          <span id="flagSyncStock" class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">false</span>
+        </div>
+        <div class="flex items-center space-x-1.5">
+          <span class="text-slate-500">pedidoActivo:</span>
+          <span id="flagPedidoActivo" class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold">false</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== CONTENIDO PRINCIPAL DINÁMICO ==================== -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 flex flex-col gap-6">
+
+    <!-- SELECCIÓN Y GESTIÓN DE PEDIDO -->
+    <section class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+      <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+            <span>Cargar Orden de Picking</span>
+          </h2>
+          <p class="text-xs text-slate-400">Selecciona un pedido de prueba o crea uno personalizado para calcular la ruta óptima en el hilo secundario.</p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 w-full md:w-auto">
+          <button onclick="cargarPedidoDemo('PED-101')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium transition-all flex-1 md:flex-none">
+            Cargar 📦 <strong>PED-101</strong> (3 ítems)
+          </button>
+          <button onclick="cargarPedidoDemo('PED-102')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium transition-all flex-1 md:flex-none">
+            Cargar 📦 <strong>PED-102</strong> (5 ítems)
+          </button>
+          <button onclick="cargarPedidoDemo('PED-103')" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-medium transition-all flex-1 md:flex-none">
+            Cargar 📦 <strong>PED-103</strong> (7 ítems)
+          </button>
+          <button onclick="abrirModalCrearPedido()" class="px-4 py-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold rounded-xl text-xs shadow-md transition-all flex-1 md:flex-none">
+            + Nuevo Pedido
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- GRID PRINCIPAL DE CONTENEDORES (SE ADAPTA SEGÚN EL MODO DE VISTA) -->
+    <div id="mainGrid" class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      
+      <!-- ==================== COLUMNA IZQUIERDA: MÓVIL OPERARIO ==================== -->
+      <section id="panelMobile" class="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col space-y-5">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+          <div class="flex items-center space-x-2">
+            <div class="w-3 h-3 rounded-full bg-emerald-500 animate-pulse"></div>
+            <h3 class="font-bold text-slate-100 text-base">Terminal Móvil - Escáner de Operario</h3>
+          </div>
+          <span class="text-xs bg-slate-800 text-slate-400 px-2.5 py-1 rounded-full border border-slate-700 font-mono">Modo Lectura QR</span>
+        </div>
+
+        <!-- Banner de Estado de la Orden -->
+        <div id="mobileOrderInfo" class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+          <div>
+            <span class="text-xs text-slate-400 block">Pedido Actual:</span>
+            <strong id="lblPedidoId" class="text-amber-400 font-mono text-base">Sin pedido cargado</strong>
+          </div>
+          <div class="text-right">
+            <span class="text-xs text-slate-400 block">Progreso de Picking:</span>
+            <strong id="lblProgreso" class="text-white font-mono text-base">0 / 0</strong>
+          </div>
+        </div>
+
+        <!-- Visor Escáner QR Real (Cámara) + Selector -->
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-3 flex flex-col items-center justify-center min-h-[220px] relative overflow-hidden">
+          
+          <!-- Contenedor del video HTML5 QR Code -->
+          <div id="reader" class="w-full max-w-xs rounded-lg overflow-hidden border border-slate-800 bg-slate-900"></div>
+
+          <!-- Overlay cuando la cámara no está activa -->
+          <div id="cameraPlaceholder" class="flex flex-col items-center justify-center p-4 text-center">
+            <svg class="w-12 h-12 text-slate-600 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
+            <p class="text-xs text-slate-400 mb-3">Usa la cámara del dispositivo o el lector físico / simulador.</p>
+            <button id="btnStartCamera" onclick="iniciarCamaraQR()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md">
+              📷 Activar Cámara QR
+            </button>
+            <button id="btnStopCamera" onclick="detenerCamaraQR()" class="hidden px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition-all shadow-md">
+              🛑 Apagar Cámara
+            </button>
+          </div>
+
+          <!-- Notificación de Alerta / Feedback de lectura -->
+          <div id="scanFeedback" class="hidden absolute inset-x-3 bottom-3 p-2.5 rounded-xl text-xs font-bold text-center transition-all shadow-lg border"></div>
+        </div>
+
+        <!-- Entrada rápida para Pistola Lectora / Simulación Manual -->
+        <div>
+          <label class="text-xs text-slate-400 mb-1 block font-medium">Ingreso manual o Lector USB/Bluetooth (Pistola Barcode):</label>
+          <div class="flex space-x-2">
+            <input type="text" id="txtScanManual" placeholder="Ej: PROD001 o PED-101" class="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono uppercase text-amber-400 focus:outline-none focus:border-amber-500">
+            <button onclick="procesarScanEntradaManual()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold">
+              Escanear
+            </button>
+          </div>
+        </div>
+
+        <!-- Botones de Prueba Rápida con los QR de la Imagen del Usuario -->
+        <div class="border-t border-slate-800 pt-3">
+          <span class="text-xs text-slate-400 block mb-2 font-medium">Simular escaneo directo de Etiquetas QR (PROD001 - PROD012):</span>
+          <div class="grid grid-cols-3 gap-1.5 max-h-36 overflow-y-auto pr-1">
+            <button onclick="simularLecturaQR('PROD001')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD001 (U00)</button>
+            <button onclick="simularLecturaQR('PROD002')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD002 (U01)</button>
+            <button onclick="simularLecturaQR('PROD003')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD003 (U02)</button>
+            <button onclick="simularLecturaQR('PROD004')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD004 (U03)</button>
+            <button onclick="simularLecturaQR('PROD005')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD005 (U04)</button>
+            <button onclick="simularLecturaQR('PROD006')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD006 (U05)</button>
+            <button onclick="simularLecturaQR('PROD007')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD007 (U06)</button>
+            <button onclick="simularLecturaQR('PROD008')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD008 (U07)</button>
+            <button onclick="simularLecturaQR('PROD009')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD009 (U08)</button>
+            <button onclick="simularLecturaQR('PROD010')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD010 (U09)</button>
+            <button onclick="simularLecturaQR('PROD011')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD011 (U10)</button>
+            <button onclick="simularLecturaQR('PROD012')" class="px-2 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-lg text-left text-[11px] font-mono text-slate-300 transition-colors">PROD012 (U11)</button>
+          </div>
+        </div>
+
+        <!-- Lista de Secuencia del Pedido Activo -->
+        <div class="border-t border-slate-800 pt-3">
+          <h4 class="text-xs font-bold text-slate-300 mb-2">Secuencia de Picking Sugerida por Algoritmo:</h4>
+          <div id="listaPasosPedido" class="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+            <div class="text-xs text-slate-500 italic py-2 text-center">Carga una orden para ver la secuencia óptima.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== COLUMNA DERECHA: MAPA SVG Y MONITOR PC ==================== -->
+      <section id="panelPC" class="lg:col-span-7 space-y-6">
+
+        <!-- MAPA SVG DE LA PLANTA (DIAGRAMA EXACTO DE PLANTA) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3 mb-4">
+            <div>
+              <h3 class="font-bold text-slate-100 text-base flex items-center space-x-2">
+                <span>Distribución de la planta (almacén virtual)</span>
+              </h3>
+              <p class="text-xs text-slate-400">4 pasillos (P0 a P3), 3 ubicaciones por pasillo (U00 a U11) y el depósito al frente.</p>
+            </div>
+
+            <!-- Métrica de Distancia Calculada por el Hilo -->
+            <div class="bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 flex items-center space-x-2">
+              <span class="text-xs text-slate-400">Distancia Óptima:</span>
+              <strong id="lblDistanciaRuta" class="text-amber-400 font-mono text-sm">0 m</strong>
+            </div>
+          </div>
+
+          <!-- Contenedor del Mapa SVG Interactivo -->
+          <div class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2 relative flex items-center justify-center overflow-x-auto">
+            <svg id="svgWarehouseMap" viewBox="0 0 600 480" class="w-full h-auto max-w-[620px] select-none">
+              
+              <!-- DEFINICIONES DE SOMBRAS Y FILTROS -->
+              <defs>
+                <filter id="glow-amber" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+                <filter id="glow-green" x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
+
+              <!-- FONDO ESTRUCTURAL DE LOS PASILLOS (Gris claro / Azul Pizarra) -->
+              <!-- Corredor Superior (Trasero) -->
+              <rect x="70" y="55" width="460" height="30" rx="15" fill="#334155" opacity="0.6"/>
+              <!-- Corredor Inferior (Frontal) -->
+              <rect x="70" y="395" width="460" height="30" rx="15" fill="#334155" opacity="0.6"/>
+              
+              <!-- Columnas de Pasillos (P0 a P3) -->
+              <!-- Pasillo P0 -->
+              <rect x="95" y="70" width="30" height="340" rx="15" fill="#334155" opacity="0.5"/>
+              <!-- Pasillo P1 -->
+              <rect x="225" y="70" width="30" height="340" rx="15" fill="#334155" opacity="0.5"/>
+              <!-- Pasillo P2 -->
+              <rect x="355" y="70" width="30" height="340" rx="15" fill="#334155" opacity="0.5"/>
+              <!-- Pasillo P3 -->
+              <rect x="485" y="70" width="30" height="340" rx="15" fill="#334155" opacity="0.5"/>
+
+              <!-- ETIQUETAS DE LOS PASILLOS (P0, P1, P2, P3) EN VERDE -->
+              <text x="110" y="42" fill="#10B981" font-size="16" font-weight="800" text-anchor="middle">P0</text>
+              <text x="240" y="42" fill="#10B981" font-size="16" font-weight="800" text-anchor="middle">P1</text>
+              <text x="370" y="42" fill="#10B981" font-size="16" font-weight="800" text-anchor="middle">P2</text>
+              <text x="500" y="42" fill="#10B981" font-size="16" font-weight="800" text-anchor="middle">P3</text>
+
+              <!-- CAPA SVG: TRAZADO DINÁMICO DE RUTA (Línea ortogonal por pasillos) -->
+              <polyline id="svgRoutePolyline" points="" fill="none" stroke="#F59E0B" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" class="route-path" opacity="0.95"/>
+
+              <!-- BLOQUE DEL DEPÓSITO (Frente, abajo a la izquierda) -->
+              <g id="node-DEP" transform="translate(30, 425)">
+                <rect x="0" y="0" width="110" height="38" rx="10" fill="#F59E0B" shadow="md"/>
+                <text x="55" y="24" fill="#0F172A" font-size="14" font-weight="800" text-anchor="middle">Depósito</text>
+              </g>
+
+              <!-- NODOS DE UBICACIÓN (U00 A U11) EXACTOS DE LA PLANTA -->
+              <!-- P0: U00 (N1), U01 (N2), U02 (N3) -->
+              <g class="node-group" id="node-U00" transform="translate(110, 340)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U00</text>
+              </g>
+              <g class="node-group" id="node-U01" transform="translate(110, 240)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U01</text>
+              </g>
+              <g class="node-group" id="node-U02" transform="translate(110, 140)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U02</text>
+              </g>
+
+              <!-- P1: U03 (N1), U04 (N2), U05 (N3) -->
+              <g class="node-group" id="node-U03" transform="translate(240, 340)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U03</text>
+              </g>
+              <g class="node-group" id="node-U04" transform="translate(240, 240)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U04</text>
+              </g>
+              <g class="node-group" id="node-U05" transform="translate(240, 140)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U05</text>
+              </g>
+
+              <!-- P2: U06 (N1), U07 (N2), U08 (N3) -->
+              <g class="node-group" id="node-U06" transform="translate(370, 340)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U06</text>
+              </g>
+              <g class="node-group" id="node-U07" transform="translate(370, 240)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U07</text>
+              </g>
+              <g class="node-group" id="node-U08" transform="translate(370, 140)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U08</text>
+              </g>
+
+              <!-- P3: U09 (N1), U10 (N2), U11 (N3) -->
+              <g class="node-group" id="node-U09" transform="translate(500, 340)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U09</text>
+              </g>
+              <g class="node-group" id="node-U10" transform="translate(500, 240)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U10</text>
+              </g>
+              <g class="node-group" id="node-U11" transform="translate(500, 140)">
+                <circle r="18" fill="#3B5266" stroke="#1E293B" stroke-width="3"/>
+                <text y="5" fill="#FFF" font-size="12" font-weight="700" text-anchor="middle">U11</text>
+              </g>
+
+              <!-- MARCADOR MÓVIL DEL OPERARIO -->
+              <circle id="svgPickerAvatar" cx="85" cy="444" r="10" fill="#10B981" stroke="#FFFFFF" stroke-width="2" class="transition-all duration-700 ease-in-out opacity-0"/>
+
+            </svg>
+          </div>
+        </div>
+
+        <!-- TABLA DE INVENTARIO EN TIEMPO REAL (VISTA ENCARGADO DE INVENTARIO) -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+            <div>
+              <h3 class="font-bold text-slate-100 text-base">Control Maestro de Inventario en Vivo</h3>
+              <p class="text-xs text-slate-400">Actualización automática al completar cada escaneo en el almacén.</p>
+            </div>
+            <button onclick="reabastecerTodoStock()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 rounded-xl text-xs font-bold transition-all">
+              🔄 Reabastecer Stock
+            </button>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs font-sans">
+              <thead class="bg-slate-950 text-slate-400 uppercase font-mono text-[10px]">
+                <tr>
+                  <th class="p-2.5">Código QR</th>
+                  <th class="p-2.5">Ubicación</th>
+                  <th class="p-2.5">Descripción del Producto</th>
+                  <th class="p-2.5 text-center">Stock Actual</th>
+                  <th class="p-2.5 text-center">Estado</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyInventario" class="divide-y divide-slate-800/60">
+                <!-- Rellenado dinámicamente con JavaScript -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- BITÁCORA DE AUDITORÍA DE ESCANEOS EN TIEMPO REAL -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-xl">
+          <h4 class="text-xs font-bold text-slate-300 mb-2 flex items-center justify-between">
+            <span>Bitácora de Transacciones / Auditoría de Escaneo:</span>
+            <span class="text-[10px] text-slate-500 font-mono">Transacciones Atómicas</span>
+          </h4>
+          <div id="logAuditoria" class="bg-slate-950 rounded-xl p-3 h-32 overflow-y-auto font-mono text-[11px] space-y-1 border border-slate-800/80">
+            <div class="text-slate-500 italic">Esperando primeros escaneos del sistema...</div>
+          </div>
+        </div>
+
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ==================== MODAL PARA CREAR PEDIDO PERSONALIZADO ==================== -->
+  <div id="modalCrearPedido" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white">Crear Nuevo Pedido de Picking</h3>
+        <button onclick="cerrarModalCrearPedido()" class="text-slate-400 hover:text-white text-lg">✕</button>
+      </div>
+      <p class="text-xs text-slate-400">Selecciona los productos que debe recolectar el operario:</p>
+      
+      <div id="modalChecklistProductos" class="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1">
+        <!-- Rellenado dinámicamente -->
+      </div>
+
+      <div class="flex justify-end space-x-2 border-t border-slate-800 pt-3">
+        <button onclick="cerrarModalCrearPedido()" class="px-4 py-2 bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold">Cancelar</button>
+        <button onclick="confirmarNuevoPedidoPersonalizado()" class="px-4 py-2 bg-amber-500 text-slate-950 font-bold rounded-xl text-xs">Calcular Ruta e Iniciar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== LÓGICA JAVASCRIPT MASTER CON HILO SECUNDARIO & FLAGS ==================== -->
+  <script>
+    /* ========================================================================
+       1. BASE DE DATOS Y CATALOGO MAESTRO (12 Ubicaciones P0-P3)
+       ======================================================================== */
+    const CATALOGO = [
+      { id: 'U00', productoId: 'PROD001', nombre: 'Tornillo M6 x 20', pasillo: 0, nivel: 1, stock: 45 },
+      { id: 'U01', productoId: 'PROD002', nombre: 'Tuerca M6', pasillo: 0, nivel: 2, stock: 120 },
+      { id: 'U02', productoId: 'PROD003', nombre: 'Arandela plana 6 mm', pasillo: 0, nivel: 3, stock: 85 },
+      { id: 'U03', productoId: 'PROD004', nombre: 'Rodamiento 608', pasillo: 1, nivel: 1, stock: 30 },
+      { id: 'U04', productoId: 'PROD005', nombre: 'Resorte de compresion', pasillo: 1, nivel: 2, stock: 15 },
+      { id: 'U05', productoId: 'PROD006', nombre: 'Perno hexagonal M8', pasillo: 1, nivel: 3, stock: 60 },
+      { id: 'U06', productoId: 'PROD007', nombre: 'Chaveta 5 x 5', pasillo: 2, nivel: 1, stock: 95 },
+      { id: 'U07', productoId: 'PROD008', nombre: 'Prisionero M5', pasillo: 2, nivel: 2, stock: 40 },
+      { id: 'U08', productoId: 'PROD009', nombre: 'Buje de bronce', pasillo: 2, nivel: 3, stock: 18 },
+      { id: 'U09', productoId: 'PROD010', nombre: 'Eje de acero 10 mm', pasillo: 3, nivel: 1, stock: 12 },
+      { id: 'U10', productoId: 'PROD011', nombre: 'Correa tipo A', pasillo: 3, nivel: 2, stock: 25 },
+      { id: 'U11', productoId: 'PROD012', nombre: 'Pasador de aleta', pasillo: 3, nivel: 3, stock: 70 },
+    ];
+
+    // Coordenadas SVG exactas de los pasillos P0-P3 y niveles para renderizado ortogonal
+    const COORDENADAS_SVG = {
+      'DEP': { x: 85, y: 444 },
+      'P0': 110, 'P1': 240, 'P2': 370, 'P3': 500,
+      'Y_FRONT': 410, 'Y_BACK': 70,
+      'N1': 340, 'N2': 240, 'N3': 140
+    };
+
+    const PEDIDOS_DEMO = {
+      'PED-101': ['PROD001', 'PROD005', 'PROD010'],
+      'PED-102': ['PROD002', 'PROD004', 'PROD007', 'PROD009', 'PROD012'],
+      'PED-103': ['PROD001', 'PROD003', 'PROD006', 'PROD008', 'PROD010', 'PROD011', 'PROD012'],
+    };
+
+    /* ========================================================================
+       2. CREACIÓN DEL WEB WORKER INLINE MEDIANTE BLOB (HILO SECUNDARIO REAL)
+       ======================================================================== */
+    const workerCode = `
+      const ANCHO_PASILLO = 2;
+
+      function distancia(a, b) {
+        if (a.pasillo === b.pasillo) return Math.abs(a.nivel - b.nivel);
+        const cruceFrontal = a.nivel + b.nivel;
+        const cruceTrasero = (4 - a.nivel) + (4 - b.nivel);
+        return Math.abs(a.pasillo - b.pasillo) * ANCHO_PASILLO + Math.min(cruceFrontal, cruceTrasero);
+      }
+
+      function construirWaypoints(secuencia) {
+        const deposito = { pasillo: 0, nivel: 0, id: 'DEP' };
+        const puntos = [deposito, ...secuencia, deposito];
+        const waypoints = [deposito];
+
+        for (let i = 0; i < puntos.length - 1; i++) {
+          const actual = puntos[i];
+          const sig = puntos[i + 1];
+
+          if (actual.pasillo !== sig.pasillo) {
+            const usarFrente = (actual.nivel + sig.nivel) <= ((4 - actual.nivel) + (4 - sig.nivel));
+            const corredorY = usarFrente ? 0 : 4;
+            if (actual.nivel !== corredorY) waypoints.push({ pasillo: actual.pasillo, nivel: corredorY, id: 'TRANS' });
+            waypoints.push({ pasillo: sig.pasillo, nivel: corredorY, id: 'TRANS' });
+          }
+          waypoints.push(sig);
+        }
+        return waypoints;
+      }
+
+      self.onmessage = function(e) {
+        const { requestId, objetivos } = e.data;
+        const deposito = { pasillo: 0, nivel: 0, id: 'DEP' };
+
+        // Poda Branch & Bound para calcular la secuencia óptima en el hilo secundario
+        let mejorRuta = [];
+        let menorDistancia = Infinity;
+
+        function permutar(actual, restantes, distAcum) {
+          if (distAcum >= menorDistancia) return;
+
+          if (restantes.length === 0) {
+            const ultimo = actual.length > 0 ? actual[actual.length - 1] : deposito;
+            const total = distAcum + distancia(ultimo, deposito);
+            if (total < menorDistancia) {
+              menorDistancia = total;
+              mejorRuta = [...actual];
+            }
+            return;
+          }
+
+          const prev = actual.length > 0 ? actual[actual.length - 1] : deposito;
+          for (let i = 0; i < restantes.length; i++) {
+            const sig = restantes[i];
+            const nuevosRestantes = restantes.filter((_, idx) => idx !== i);
+            permutar([...actual, sig], nuevosRestantes, distAcum + distancia(prev, sig));
+          }
+        }
+
+        permutar([], objetivos, 0);
+
+        self.postMessage({
+          requestId,
+          secuencia: mejorRuta,
+          distanciaTotal: menorDistancia,
+          waypoints: construirWaypoints(mejorRuta)
+        });
+      };
+    `;
+
+    const blobWorker = new Blob([workerCode], { type: 'application/javascript' });
+    const rutaWorker = new Worker(URL.createObjectURL(blobWorker));
+
+    /* ========================================================================
+       3. BANDERAS DE ESTADO Y CONTROLADOR DE TIEMPO REAL
+       ======================================================================== */
+    const stateFlags = {
+      requestId: 0,
+      isCalculandoRuta: false,
+      isEscanerBloqueado: false,
+      isSincronizandoStock: false,
+      pedidoActivo: false
+    };
+
+    let pedidoActualId = '';
+    let secuenciaRutaOptima = [];
+    let waypointsMapa = [];
+    let pasoActualIndex = 0;
+    let html5QrCodeScanner = null;
+    let ultimoQrLeido = '';
+    let timestampUltimoScan = 0;
+
+    // Canal BroadcastChannel para Sincronización en Tiempo Real entre Pestañas
+    const broadcast = new BroadcastChannel('picking_twin_sync');
+
+    /* ========================================================================
+       4. AUDIO FEEDBACK (SINTETIZADOR WEB AUDIO API)
+       ======================================================================== */
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    function playBeep(freq, type, duration) {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtFrame(0.001, audioCtx.currentTime + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + duration);
+    }
+
+    function soundSuccess() { playBeep(880, 'sine', 0.15); setTimeout(() => playBeep(1200, 'sine', 0.2), 100); }
+    function soundError() { playBeep(220, 'sawtooth', 0.3); }
+    function soundComplete() { 
+      playBeep(523.25, 'triangle', 0.15); 
+      setTimeout(() => playBeep(659.25, 'triangle', 0.15), 150);
+      setTimeout(() => playBeep(783.99, 'triangle', 0.3), 300);
+    }
+
+    /* ========================================================================
+       5. MANEJO DE EVENTOS DEL HILO SECUNDARIO (WEB WORKER)
+       ======================================================================== */
+    rutaWorker.onmessage = function(e) {
+      const data = e.data;
+      if (data.requestId !== stateFlags.requestId) return; // Invalida peticiones obsoletas
+
+      secuenciaRutaOptima = data.secuencia;
+      waypointsMapa = data.waypoints;
+      pasoActualIndex = 0;
+
+      stateFlags.isCalculandoRuta = false;
+      stateFlags.pedidoActivo = true;
+
+      actualizarUIBanderas();
+      renderizarRutaMapaSVG();
+      renderizarSecuenciaPasos();
+      
+      document.getElementById('lblDistanciaRuta').innerText = `${data.distanciaTotal * 12} metros`;
+      logAuditoria(`[HILO SECUNDARIO] Ruta calculada en Worker para ${pedidoActualId}. Puntos de visita: ${secuenciaRutaOptima.length}`);
+    };
+
+    /* ========================================================================
+       6. CARGAR Y PROCESAR PEDIDOS
+       ======================================================================== */
+    function cargarPedidoDemo(pedidoId) {
+      const productosIds = PEDIDOS_DEMO[pedidoId];
+      if (!productosIds) return;
+
+      pedidoActualId = pedidoId;
+      document.getElementById('lblPedidoId').innerText = pedidoId;
+
+      const objetivos = CATALOGO.filter(u => productosIds.includes(u.productoId));
+
+      stateFlags.requestId++;
+      stateFlags.isCalculandoRuta = true;
+      actualizarUIBanderas();
+
+      // Enviar solicitud de cálculo al Web Worker en segundo plano
+      rutaWorker.postMessage({
+        requestId: stateFlags.requestId,
+        objetivos: objetivos
+      });
+
+      // Notificar a otras pestañas
+      broadcast.postMessage({ tipo: 'CARGAR_PEDIDO', pedidoId, productosIds });
+    }
+
+    /* ========================================================================
+       7. LÓGICA DE ESCANEO DE QR Y CONTROL DE REBONTE
+       ======================================================================== */
+    async function procesarLecturaQR(codigoRaw) {
+      const codigo = codigoRaw.trim().toUpperCase();
+      const ahora = Date.now();
+
+      // Verificar Banderas de Estado
+      if (!stateFlags.pedidoActivo || stateFlags.isCalculandoRuta || stateFlags.isSincronizandoStock) {
+        mostrarFeedbackScan('⚠️ Sistema ocupado o sin pedido activo', 'error');
+        return;
+      }
+
+      // Prevenir rebote de doble escaneo (Cooldown 1.5s)
+      if (stateFlags.isEscanerBloqueado || (codigo === ultimoQrLeido && ahora - timestampUltimoScan < 1500)) {
+        return;
+      }
+
+      stateFlags.isEscanerBloqueado = true;
+      ultimoQrLeido = codigo;
+      timestampUltimoScan = ahora;
+      actualizarUIBanderas();
+
+      const objetivoEsperado = secuenciaRutaOptima[pasoActualIndex];
+      
+      if (!objetivoEsperado) {
+        stateFlags.isEscanerBloqueado = false;
+        actualizarUIBanderas();
+        return;
+      }
+
+      // Validar si el escaneo es correcto o equivocado
+      if (codigo !== objetivoEsperado.productoId) {
+        soundError();
+        mostrarFeedbackScan(`❌ ¡ERROR! Escaneaste ${codigo}. Se esperaba: ${objetivoEsperado.productoId} en ${objetivoEsperado.id}`, 'error');
+        setTimeout(() => {
+          stateFlags.isEscanerBloqueado = false;
+          actualizarUIBanderas();
+        }, 1200);
+        return;
+      }
+
+      // Procesamiento exitoso -> Descontar Inventario
+      stateFlags.isSincronizandoStock = true;
+      actualizarUIBanderas();
+
+      soundSuccess();
+      descontarStockProducto(codigo);
+      
+      pasoActualIndex++;
+      
+      mostrarFeedbackScan(`✅ ¡CORRECTO! ${objetivoEsperado.nombre} (${objetivoEsperado.id}) recolectado`, 'success');
+      logAuditoria(`[PICKING] Operario escaneó ${codigo} en ${objetivoEsperado.id}. Stock actualizado.`);
+
+      // Sincronizar con otras pestañas
+      broadcast.postMessage({ tipo: 'ESCANEO_CORRECTO', productoId: codigo, pasoIndex: pasoActualIndex });
+
+      if (pasoActualIndex >= secuenciaRutaOptima.length) {
+        soundComplete();
+        stateFlags.pedidoActivo = false;
+        mostrarFeedbackScan(`🎉 ¡ORDEN ${pedidoActualId} COMPLETADA CON ÉXITO!`, 'complete');
+        logAuditoria(`[FIN] Orden ${pedidoActualId} finalizada completamente.`);
+      }
+
+      renderizarRutaMapaSVG();
+      renderizarSecuenciaPasos();
+
+      setTimeout(() => {
+        stateFlags.isSincronizandoStock = false;
+        stateFlags.isEscanerBloqueado = false;
+        actualizarUIBanderas();
+      }, 800);
+    }
+
+    function simularLecturaQR(codigo) {
+      procesarLecturaQR(codigo);
+    }
+
+    function procesarScanEntradaManual() {
+      const input = document.getElementById('txtScanManual');
+      const val = input.value;
+      if (!val) return;
+      
+      // Si escanea un pedido (PED-XXX)
+      if (val.startsWith('PED-')) {
+        cargarPedidoDemo(val);
+      } else {
+        procesarLecturaQR(val);
+      }
+      input.value = '';
+    }
+
+    /* ========================================================================
+       8. MAPA INTERACTIVO SVG (TRAZADO DE RUTA Y PLANTA)
+       ======================================================================== */
+    function renderizarRutaMapaSVG() {
+      // 1. Limpiar estilos previos de todos los nodos
+      CATALOGO.forEach(item => {
+        const groupNode = document.getElementById(`node-${item.id}`);
+        if (!groupNode) return;
+        const circle = groupNode.querySelector('circle');
+        circle.setAttribute('fill', '#3B5266');
+        circle.setAttribute('filter', '');
+        circle.classList.remove('node-pulse');
+      });
+
+      if (secuenciaRutaOptima.length === 0) return;
+
+      // 2. Dibujar la línea ortogonal siguiendo pasillos
+      let pointsStr = '';
+      waypointsMapa.forEach(wp => {
+        let x = 0, y = 0;
+        if (wp.id === 'DEP') {
+          x = COORDENADAS_SVG.DEP.x;
+          y = COORDENADAS_SVG.DEP.y;
+        } else {
+          x = COORDENADAS_SVG[`P${wp.pasillo}`];
+          if (wp.nivel === 0) y = COORDENADAS_SVG.Y_FRONT;
+          else if (wp.nivel === 4) y = COORDENADAS_SVG.Y_BACK;
+          else y = COORDENADAS_SVG[`N${wp.nivel}`];
+        }
+        pointsStr += `${x},${y} `;
+      });
+
+      document.getElementById('svgRoutePolyline').setAttribute('points', pointsStr);
+
+      // 3. Destacar nodos pendientes, actual y completados
+      secuenciaRutaOptima.forEach((item, index) => {
+        const groupNode = document.getElementById(`node-${item.id}`);
+        if (!groupNode) return;
+        const circle = groupNode.querySelector('circle');
+
+        if (index < pasoActualIndex) {
+          // Ya recolectado (Verde Esmeralda)
+          circle.setAttribute('fill', '#10B981');
+          circle.setAttribute('filter', 'url(#glow-green)');
+        } else if (index === pasoActualIndex && stateFlags.pedidoActivo) {
+          // Siguiente destino (Ámbar pulsante)
+          circle.setAttribute('fill', '#F59E0B');
+          circle.setAttribute('filter', 'url(#glow-amber)');
+          circle.classList.add('node-pulse');
+
+          // Mover Avatar del Operario en el SVG
+          const avatar = document.getElementById('svgPickerAvatar');
+          const posX = COORDENADAS_SVG[`P${item.pasillo}`];
+          const posY = COORDENADAS_SVG[`N${item.nivel}`];
+          avatar.setAttribute('cx', posX);
+          avatar.setAttribute('cy', posY);
+          avatar.setAttribute('class', 'transition-all duration-700 ease-in-out opacity-100');
+        } else {
+          // Pendiente en la cola (Azul suave)
+          circle.setAttribute('fill', '#2563EB');
+        }
+      });
+    }
+
+    /* ========================================================================
+       9. GESTIÓN DE INVENTARIO Y TABLA EN TIEMPO REAL
+       ======================================================================== */
+    function renderizarTablaInventario() {
+      const tbody = document.getElementById('tbodyInventario');
+      tbody.innerHTML = '';
+
+      CATALOGO.forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-800/40 transition-colors';
+        
+        const badgeStock = item.stock <= 20 
+          ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20">Bajo Stock</span>`
+          : `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">OK</span>`;
+
+        tr.innerHTML = `
+          <td class="p-2.5 font-mono text-amber-400 font-bold">${item.productoId}</td>
+          <td class="p-2.5 font-mono text-slate-300 font-semibold">${item.id}</td>
+          <td class="p-2.5 text-slate-200">${item.nombre}</td>
+          <td class="p-2.5 text-center font-mono font-bold text-white">${item.stock}</td>
+          <td class="p-2.5 text-center">${badgeStock}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function descontarStockProducto(prodId) {
+      const item = CATALOGO.find(u => u.productoId === prodId);
+      if (item && item.stock > 0) {
+        item.stock--;
+        renderizarTablaInventario();
+      }
+    }
+
+    function reabastecerTodoStock() {
+      CATALOGO.forEach(u => u.stock = 100);
+      renderizarTablaInventario();
+      logAuditoria(`[INVENTARIO] Todo el stock fue reabastecido a 100 unidades.`);
+      broadcast.postMessage({ tipo: 'REABASTECER_STOCK' });
+    }
+
+    /* ========================================================================
+       10. CÁMARA ESCÁNER QR CON LIBRERÍA HTML5-QRCODE
+       ======================================================================== */
+    function iniciarCamaraQR() {
+      document.getElementById('cameraPlaceholder').classList.add('hidden');
+      document.getElementById('btnStartCamera').classList.add('hidden');
+      document.getElementById('btnStopCamera').classList.remove('hidden');
+
+      html5QrCodeScanner = new Html5Qrcode("reader");
+      html5QrCodeScanner.start(
+        { facingMode: "environment" },
+        { fps: 15, qrbox: { width: 220, height: 220 } },
+        (decodedText) => {
+          procesarLecturaQR(decodedText);
+        },
+        (errorMessage) => {
+          // Ignorar errores menores de frame sin QR
+        }
+      ).catch(err => {
+        alert("No se pudo acceder a la cámara. Usa la simulación rápida de botones.");
+        detenerCamaraQR();
+      });
+    }
+
+    function detenerCamaraQR() {
+      if (html5QrCodeScanner) {
+        html5QrCodeScanner.stop().then(() => {
+          html5QrCodeScanner.clear();
+          document.getElementById('cameraPlaceholder').classList.remove('hidden');
+          document.getElementById('btnStartCamera').classList.remove('hidden');
+          document.getElementById('btnStopCamera').classList.add('hidden');
+        });
+      }
+    }
+
+    /* ========================================================================
+       11. RENDERIZADO DE PASOS Y FEEDBACK VISUAL
+       ======================================================================== */
+    function renderizarSecuenciaPasos() {
+      const contenedor = document.getElementById('listaPasosPedido');
+      contenedor.innerHTML = '';
+
+      document.getElementById('lblProgreso').innerText = `${pasoActualIndex} / ${secuenciaRutaOptima.length}`;
+
+      if (secuenciaRutaOptima.length === 0) {
+        contenedor.innerHTML = `<div class="text-xs text-slate-500 italic py-2 text-center">Sin orden cargada.</div>`;
+        return;
+      }
+
+      secuenciaRutaOptima.forEach((item, index) => {
+        const div = document.createElement('div');
+        let bgClass = "bg-slate-950 text-slate-400 border-slate-800";
+        let statusBadge = `<span class="text-[10px] text-slate-500 font-mono">Pendiente</span>`;
+
+        if (index < pasoActualIndex) {
+          bgClass = "bg-emerald-950/30 border-emerald-800/50 text-emerald-300";
+          statusBadge = `<span class="text-[10px] font-bold text-emerald-400">✓ Recolectado</span>`;
+        } else if (index === pasoActualIndex && stateFlags.pedidoActivo) {
+          bgClass = "bg-amber-950/40 border-amber-500 text-amber-300 ring-1 ring-amber-500/50";
+          statusBadge = `<span class="text-[10px] font-bold text-amber-400 animate-pulse">◀ IR AQUÍ</span>`;
+        }
+
+        div.className = `p-2 rounded-xl border text-xs flex items-center justify-between ${bgClass}`;
+        div.innerHTML = `
+          <div class="flex items-center space-x-2">
+            <span class="w-5 h-5 rounded-full bg-slate-800 text-slate-200 text-[10px] font-bold flex items-center justify-center font-mono">${index + 1}</span>
+            <div>
+              <strong class="font-mono text-white">${item.id}</strong> - <span class="font-medium">${item.nombre}</span>
+              <span class="block text-[10px] text-slate-500 font-mono">QR: ${item.productoId}</span>
+            </div>
+          </div>
+          <div>${statusBadge}</div>
+        `;
+        contenedor.appendChild(div);
+      });
+    }
+
+    function mostrarFeedbackScan(mensaje, tipo) {
+      const box = document.getElementById('scanFeedback');
+      box.classList.remove('hidden', 'bg-emerald-900/90', 'border-emerald-500', 'text-emerald-200', 'bg-rose-900/90', 'border-rose-500', 'text-rose-200', 'bg-amber-900/90', 'border-amber-500', 'text-amber-200');
+      
+      if (tipo === 'success') box.classList.add('bg-emerald-900/90', 'border-emerald-500', 'text-emerald-200');
+      else if (tipo === 'error') box.classList.add('bg-rose-900/90', 'border-rose-500', 'text-rose-200');
+      else box.classList.add('bg-amber-900/90', 'border-amber-500', 'text-amber-200');
+
+      box.innerText = mensaje;
+      setTimeout(() => box.classList.add('hidden'), 2500);
+    }
+
+    function actualizarUIBanderas() {
+      document.getElementById('flagRequestId').innerText = `#${stateFlags.requestId}`;
+      
+      setFlagBadge('flagCalculando', stateFlags.isCalculandoRuta);
+      setFlagBadge('flagBloqueado', stateFlags.isEscanerBloqueado);
+      setFlagBadge('flagSyncStock', stateFlags.isSincronizandoStock);
+      setFlagBadge('flagPedidoActivo', stateFlags.pedidoActivo);
+    }
+
+    function setFlagBadge(elemId, val) {
+      const el = document.getElementById(elemId);
+      el.innerText = val ? 'true' : 'false';
+      if (val) {
+        el.className = 'px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold border border-amber-500/30';
+      } else {
+        el.className = 'px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-semibold';
+      }
+    }
+
+    function logAuditoria(txt) {
+      const log = document.getElementById('logAuditoria');
+      const time = new Date().toLocaleTimeString();
+      const div = document.createElement('div');
+      div.className = "text-slate-300";
+      div.innerHTML = `<span class="text-slate-500">[${time}]</span> ${txt}`;
+      log.prepend(div);
+    }
+
+    /* ========================================================================
+       12. SELECTOR DE VISTAS (DUAL / MÓVIL / PC)
+       ======================================================================== */
+    function setModoVista(modo) {
+      const panelMobile = document.getElementById('panelMobile');
+      const panelPC = document.getElementById('panelPC');
+      const mainGrid = document.getElementById('mainGrid');
+
+      document.getElementById('btnViewDual').className = "px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all";
+      document.getElementById('btnViewMobile').className = "px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all";
+      document.getElementById('btnViewPC').className = "px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all";
+
+      if (modo === 'dual') {
+        document.getElementById('btnViewDual').className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 shadow";
+        panelMobile.classList.remove('hidden');
+        panelPC.classList.remove('hidden');
+        panelMobile.className = "lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col space-y-5";
+        panelPC.className = "lg:col-span-7 space-y-6";
+        mainGrid.className = "grid grid-cols-1 lg:grid-cols-12 gap-6 items-start";
+      } else if (modo === 'mobile') {
+        document.getElementById('btnViewMobile').className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 shadow";
+        panelMobile.classList.remove('hidden');
+        panelPC.classList.add('hidden');
+        panelMobile.className = "max-w-xl mx-auto w-full bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col space-y-5";
+      } else if (modo === 'pc') {
+        document.getElementById('btnViewPC').className = "px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 shadow";
+        panelMobile.classList.add('hidden');
+        panelPC.classList.remove('hidden');
+        panelPC.className = "max-w-4xl mx-auto w-full space-y-6";
+      }
+    }
+
+    /* ========================================================================
+       13. MODAL NUEVO PEDIDO PERSONALIZADO
+       ======================================================================== */
+    function abrirModalCrearPedido() {
+      const container = document.getElementById('modalChecklistProductos');
+      container.innerHTML = '';
+      
+      CATALOGO.forEach(u => {
+        const label = document.createElement('label');
+        label.className = "flex items-center space-x-2 bg-slate-950 p-2 rounded-xl border border-slate-800 cursor-pointer hover:border-slate-700";
+        label.innerHTML = `
+          <input type="checkbox" value="${u.productoId}" class="rounded border-slate-700 bg-slate-900 text-amber-500 focus:ring-0">
+          <span class="text-xs text-slate-200 font-mono font-bold">${u.id}</span>
+          <span class="text-xs text-slate-400 truncate">${u.nombre}</span>
+        `;
+        container.appendChild(label);
+      });
+
+      document.getElementById('modalCrearPedido').classList.remove('hidden');
+    }
+
+    function cerrarModalCrearPedido() {
+      document.getElementById('modalCrearPedido').classList.add('hidden');
+    }
+
+    function confirmarNuevoPedidoPersonalizado() {
+      const checked = Array.from(document.querySelectorAll('#modalChecklistProductos input:checked')).map(c => c.value);
+      if (checked.length === 0) {
+        alert("Selecciona al menos un producto.");
+        return;
+      }
+      const nuevoId = `PED-CUSTOM-${Math.floor(Math.random() * 900 + 100)}`;
+      PEDIDOS_DEMO[nuevoId] = checked;
+      cerrarModalCrearPedido();
+      cargarPedidoDemo(nuevoId);
+    }
+
+    /* ========================================================================
+       14. TRANSMISIÓN MULTI-PESTAÑA VÍA BROADCASTCHANNEL
+       ======================================================================== */
+    broadcast.onmessage = function(e) {
+      const msg = e.data;
+      if (msg.tipo === 'CARGAR_PEDIDO') {
+        cargarPedidoDemo(msg.pedidoId);
+      } else if (msg.tipo === 'ESCANEO_CORRECTO') {
+        descontarStockProducto(msg.productoId);
+        pasoActualIndex = msg.pasoIndex;
+        renderizarRutaMapaSVG();
+        renderizarSecuenciaPasos();
+      } else if (msg.tipo === 'REABASTECER_STOCK') {
+        CATALOGO.forEach(u => u.stock = 100);
+        renderizarTablaInventario();
+      }
+    };
+
+    /* ========================================================================
+       15. INICIALIZACIÓN AL CARGAR LA PÁGINA
+       ======================================================================== */
+    window.onload = function() {
+      renderizarTablaInventario();
+      actualizarUIBanderas();
+      // Cargar pedido de muestra inicial (PED-101)
+      cargarPedidoDemo('PED-101');
+    };
+  </script>
+</body>
+</html>
